@@ -1,0 +1,8 @@
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.32
+asyncpg>=0.29,<0.31
+arq>=0.26,<0.27
+redis>=5.0,<6
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+anthropic>=0.40,<1

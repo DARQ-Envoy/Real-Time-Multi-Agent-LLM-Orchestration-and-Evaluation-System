@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mega AI</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body data-cut-timeline="false">
+  <header>
+    <h1>Mega AI</h1>
+    <span id="status" class="status-idle">idle</span>
+  </header>
+
+  <form id="query-form">
+    <textarea id="query" name="query" rows="2" placeholder="Ask a question about the README… (e.g. What is the retry policy?)"></textarea>
+    <button id="submit" type="submit" disabled>Submit</button>
+  </form>
+
+  <div id="error-banner" hidden></div>
+
+  <main>
+    <aside id="timeline-panel" aria-label="Agent activity timeline">
+      <h2>Agent Activity</h2>
+      <ol id="timeline"></ol>
+    </aside>
+
+    <section id="answer-panel" aria-label="Live answer">
+      <h2>Live Answer</h2>
+      <div id="answer-streaming" class="answer-block"></div>
+      <div id="answer-final" class="answer-block" hidden></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
