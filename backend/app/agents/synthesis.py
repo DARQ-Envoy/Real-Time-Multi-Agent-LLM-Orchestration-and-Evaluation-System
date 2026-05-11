@@ -3,10 +3,12 @@ from __future__ import annotations
 import re
 from typing import AsyncIterator
 
+from ..budget import count_tokens
 from ..llm import LLMClient
 from ..models import (
     AgentEndEvent,
     AgentStartEvent,
+    BudgetRequestEvent,
     SentenceProvenance,
     SharedContext,
     SSEEvent,
@@ -66,7 +68,11 @@ class SynthesisAgent(AgentBase):
                 f"- {st.description} ({st.task_type})"
                 for st in ctx.decomposition.sub_tasks
             )
-        rag_draft = f"\nRAG draft answer:\n{ctx.rag_answer}" if ctx.rag_answer else ""
+        # E3: prefer compressed summary over full rag_answer when compression ran.
+        if ctx.compressed and ctx.compressed.summary:
+            rag_draft = f"\nRAG draft (compressed):\n{ctx.compressed.summary}"
+        else:
+            rag_draft = f"\nRAG draft answer:\n{ctx.rag_answer}" if ctx.rag_answer else ""
         critique_block = ""
         if ctx.resolution_loop_active:
             prior = next(
@@ -94,6 +100,24 @@ class SynthesisAgent(AgentBase):
             f"{decomp_block}{rag_draft}{critique_block}\n\n"
             "Produce the final answer now in the required line format."
         )
+
+        # E3 pre-stream budget gate. If the manager says we don't fit, yield
+        # BudgetRequestEvent and exit early — pipeline runs compression and
+        # re-invokes this agent.
+        manager = ctx.agent_outputs.get("__budget_manager__")
+        if manager is not None and ctx.compressed is None:
+            tokens_requested = count_tokens(user_msg) + 800
+            if not manager.check_budget(self.agent_id, tokens_requested):
+                yield BudgetRequestEvent(
+                    agent_id=self.agent_id, tokens_requested=tokens_requested
+                )
+                yield AgentEndEvent(
+                    agent_id=self.agent_id,
+                    output_hash="",
+                    policy_violations="BUDGET_REQUEST_DEFERRED",
+                )
+                return
+
         accumulated = ""
         violations: str | None = None
         try:

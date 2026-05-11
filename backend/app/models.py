@@ -55,6 +55,12 @@ class ErrorEvent(BaseModel):
     job_id: str
 
 
+class BudgetRequestEvent(BaseModel):
+    type: Literal["budget_request"] = "budget_request"
+    agent_id: str
+    tokens_requested: int
+
+
 SSEEvent = Annotated[
     Union[
         AgentStartEvent,
@@ -62,6 +68,7 @@ SSEEvent = Annotated[
         ToolCallStartEvent,
         ToolCallEndEvent,
         BudgetUpdateEvent,
+        BudgetRequestEvent,
         AgentEndEvent,
         JobCompleteEvent,
         ErrorEvent,
@@ -145,6 +152,12 @@ class ContradictionSpan(BaseModel):
     description: str
 
 
+class CompressedContext(BaseModel):
+    compression_ratio: float
+    lossless_fields_preserved: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 class SharedContext(BaseModel):
     job_id: str
     query: str
@@ -158,6 +171,7 @@ class SharedContext(BaseModel):
     low_coverage: bool = False
     critique_reports: list[CritiqueReport] = Field(default_factory=list)
     resolution_loop_active: bool = False
+    compressed: CompressedContext | None = None
 
 
 class ToolResult(BaseModel):

@@ -8,6 +8,19 @@ import uuid
 from typing import Any
 
 
+def merge_violations(existing: str | None, addition: str | None) -> str | None:
+    """Append `addition` to `existing` with a `;` separator. None-safe.
+
+    Used by the budget audit so BUDGET_OVERFLOW does not clobber other
+    policy_violations (e.g. SYNTHESIS_LLM_FAIL, FALLBACK_TO_RAG_DRAFT).
+    """
+    if not addition:
+        return existing
+    if not existing:
+        return addition
+    return f"{existing};{addition}"
+
+
 def sha256_json(obj: Any) -> str | None:
     if obj is None:
         return None

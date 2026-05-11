@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     CODE_EXEC_TIMEOUT_SECONDS: int = 10
     WEB_SEARCH_TIMEOUT_SECONDS: int = 5
     SQL_LOOKUP_TIMEOUT_SECONDS: int = 8
+
+    # Per-agent context budgets (E3). Values are token counts; the gate uses
+    # the deterministic `len(text) // 4` heuristic in `app.budget`.
+    BUDGET_ORCHESTRATOR: int = 4096
+    BUDGET_DECOMP: int = 3072
+    BUDGET_RAG: int = 6144
+    BUDGET_CRITIQUE: int = 4096
+    BUDGET_SYNTHESIS: int = 8192
+    BUDGET_COMPRESSION: int = 2048
+
     LOG_LEVEL: str = "INFO"
     EVAL_CONCURRENCY: int = 4
     CUT_DECOMPOSITION: bool = False

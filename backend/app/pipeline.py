@@ -6,19 +6,23 @@ import time
 from typing import Any
 
 from .agents.base import AgentBase
+from .agents.compression import CompressionAgent
 from .agents.critique import CritiqueAgent
 from .agents.decomposition import DecompositionAgent
 from .agents.orchestrator import OrchestratorAgent
 from .agents.rag import RAGAgent
 from .agents.synthesis import SynthesisAgent
+from .budget import ContextBudgetManager, count_tokens
 from .llm import LLMClient, LLMNotConfigured
 from .models import (
     AgentEndEvent,
+    BudgetRequestEvent,
     ErrorEvent,
     SentenceProvenance,
     SharedContext,
+    TokenEvent,
 )
-from .persistence import log_agent_event, sha256_json
+from .persistence import log_agent_event, merge_violations, sha256_json
 from .redis_bus import publish_event
 from .settings import settings
 from .tools import self_reflection
@@ -59,8 +63,11 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
         )
         return []
 
+    budget_manager = ContextBudgetManager()
+    shared_ctx.agent_outputs["__budget_manager__"] = budget_manager
+
     orchestrator = OrchestratorAgent(llm)
-    await _run_agent(orchestrator, shared_ctx, redis, db_pool)
+    await _run_agent(orchestrator, shared_ctx, redis, db_pool, budget_manager)
 
     sequence = (
         list(shared_ctx.routing_plan.agent_sequence)
@@ -84,10 +91,21 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
             continue
         await _dispatch_tool_calls(agent_id, shared_ctx, llm, db_pool, redis)
         agent = cls(llm)
-        await _run_agent(agent, shared_ctx, redis, db_pool)
+        budget_requested = await _run_agent(
+            agent, shared_ctx, redis, db_pool, budget_manager
+        )
+
+        # E3 compression-and-rerun loop: if the agent yielded a
+        # BudgetRequestEvent and compression hasn't already run for this job,
+        # invoke CompressionAgent once and re-run the originating agent ONCE.
+        if budget_requested and shared_ctx.compressed is None:
+            compression = CompressionAgent(llm, db_pool)
+            await _run_agent(compression, shared_ctx, redis, db_pool, budget_manager)
+            agent = cls(llm)
+            await _run_agent(agent, shared_ctx, redis, db_pool, budget_manager)
 
         critic = CritiqueAgent(llm, target_agent_id=agent_id)
-        await _run_agent(critic, shared_ctx, redis, db_pool)
+        await _run_agent(critic, shared_ctx, redis, db_pool, budget_manager)
 
     await run_with_retry(
         self_reflection.run,
@@ -107,6 +125,7 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
             shared_ctx,
             redis,
             db_pool,
+            budget_manager,
             extra_violation="RESOLUTION_LOOP_RUN",
         )
 
@@ -194,9 +213,15 @@ async def _run_agent(
     ctx: SharedContext,
     redis,
     db_pool,
+    budget_manager: ContextBudgetManager | None = None,
     *,
     extra_violation: str | None = None,
-) -> None:
+) -> bool:
+    """Run an agent through its event stream.
+
+    Returns True if the agent emitted a BudgetRequestEvent (caller decides
+    whether to invoke CompressionAgent and rerun).
+    """
     started = time.perf_counter()
     input_hash = sha256_json(_input_snapshot(ctx, agent.agent_id))
     async with db_pool.acquire() as conn:
@@ -209,17 +234,35 @@ async def _run_agent(
         )
     last_output_hash: str | None = None
     last_violations: str | None = None
+    budget_requested = False
+    streamed_text = ""
     async for event in agent.run(ctx):
         if isinstance(event, AgentEndEvent):
             last_output_hash = event.output_hash or None
             last_violations = event.policy_violations
+        elif isinstance(event, BudgetRequestEvent):
+            budget_requested = True
+        elif isinstance(event, TokenEvent):
+            streamed_text += event.text
         await publish_event(redis, ctx.job_id, event.model_dump())
     elapsed_ms = (time.perf_counter() - started) * 1000.0
+
     final_violations = last_violations
     if extra_violation:
-        final_violations = (
-            f"{final_violations};{extra_violation}" if final_violations else extra_violation
-        )
+        final_violations = merge_violations(final_violations, extra_violation)
+
+    # E3 post-execution overflow audit: compare the agent's streamed token
+    # output to its declared budget. Overflow → append BUDGET_OVERFLOW:<n>.
+    overflow_marker: str | None = None
+    if budget_manager is not None and streamed_text:
+        used = count_tokens(streamed_text)
+        budget = budget_manager.budget_for(agent.agent_id)
+        if used > budget:
+            overflow = used - budget
+            budget_manager.report_violation(agent.agent_id, overflow)
+            overflow_marker = f"BUDGET_OVERFLOW:{overflow}"
+            final_violations = merge_violations(final_violations, overflow_marker)
+
     async with db_pool.acquire() as conn:
         await log_agent_event(
             conn,
@@ -231,6 +274,7 @@ async def _run_agent(
             latency_ms=elapsed_ms,
             policy_violations=final_violations,
         )
+    return budget_requested
 
 
 def _input_snapshot(ctx: SharedContext, agent_id: str) -> dict[str, Any]:
