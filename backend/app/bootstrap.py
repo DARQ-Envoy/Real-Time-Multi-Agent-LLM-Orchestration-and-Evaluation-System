@@ -9,6 +9,7 @@ from .settings import settings
 SQL_DIR = Path(__file__).parent / "sql"
 INIT_SQL = SQL_DIR / "001_init.sql"
 RO_GRANTS_SQL = SQL_DIR / "003_readonly_role.sql"
+RETRY_REASON_SQL = SQL_DIR / "004_tool_calls_retry_reason.sql"
 
 
 def _quote_pg_literal(value: str) -> str:
@@ -43,7 +44,9 @@ async def init_schema(pool: asyncpg.Pool) -> None:
     """
     init_sql = INIT_SQL.read_text(encoding="utf-8")
     grants_sql = RO_GRANTS_SQL.read_text(encoding="utf-8")
+    retry_reason_sql = RETRY_REASON_SQL.read_text(encoding="utf-8")
     async with pool.acquire() as conn:
         await conn.execute(init_sql)
         await _ensure_readonly_role(conn, settings.MEGA_RO_PASSWORD)
         await conn.execute(grants_sql)
+        await conn.execute(retry_reason_sql)

@@ -16,8 +16,15 @@ but should be tracked for future attention.
 - **`ALTER DEFAULT PRIVILEGES` is role-bound.** Tables created by a role other than the bootstrap superuser won't grant SELECT to `mega_ro` automatically. Fine while `init_schema` is the only creator.
 
 ### Runner persistence
-- **`tool_calls.input` stores `{job_id, query_hash}`, not the actual planned input** (e.g. the LLM-emitted SQL, the search query). Forensics suffers. The fix lives in `tools/runner.py`, which is out-of-scope per E1 boundaries; pick it up in **E2** when the retry FSM lands.
-- **Empty Tavily results trigger retries.** `_accept(result)` in `runner.py` treats `data=[]` as not-accepted, so an EMPTY web_search burns `MAX_RETRIES + 1` Tavily calls. Address in **E2** alongside the per-tool fallback contracts.
+- ~~`tool_calls.input` stores `{job_id, query_hash}`, not the actual planned input.~~ **Resolved in E2** — pipeline now passes `input_payload` through `run_with_retry`.
+- **Empty Tavily results trigger retries.** `_accept(result)` in `runner.py` (now `retry.py`) treats `data=[]` as not-accepted, so an EMPTY web_search burns 3 Tavily calls. Could address by treating `data=[]` as accepted when error_code == EMPTY; needs care so retries still happen on transient empty results vs persistent empties.
+
+## From E2 review (2026-05-11)
+
+### Operational hardening
+- **Duplicate `self_reflection` invocation on web_search TIMEOUT fallback.** Pipeline already runs self_reflection at the end of the agent loop; the web_search fallback ALSO runs it via the same `run_with_retry`, doubling LLM cost. Could check `("self_reflection","done")` on ctx and skip the second run, or defer to E3 budget gating.
+- **Schema cache survives pool-identity change.** `_schema_cache` / `_compact_schema_cache` are only cleared on `set_ro_pool(None)`. If a future call replaces the pool with a new object (same DB, same role) the cache stays stale. Reset on every `set_ro_pool(...)` if the pool identity changes, or add a TTL.
+- **Cosmetic dead field: `code_exec_failed.suggested_replan`** is set to True by the fallback but never read (decomposition uses a truthy check on the dict itself). Either consume the field meaningfully (e.g. only prefix when True) or drop it.
 
 ### Infra hygiene
 - **Dockerfile bakes `tests/` and `pytest.ini` into the production image.** Acceptable for the assessment; split into a separate test stage / target before prod hardening.

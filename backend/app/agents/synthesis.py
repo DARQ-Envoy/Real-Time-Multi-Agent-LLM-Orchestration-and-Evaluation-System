@@ -121,6 +121,22 @@ class SynthesisAgent(AgentBase):
             ]
             violations = (violations or "") + ";EMPTY_OUTPUT" if violations else "EMPTY_OUTPUT"
 
+        if ctx.agent_outputs.get("web_unavailable"):
+            already_marked = (
+                provenance
+                and provenance[0].source_agent == "web_fallback"
+                and provenance[0].sentence_text == "[WEB_UNAVAILABLE]"
+            )
+            if not already_marked:
+                provenance = [
+                    SentenceProvenance(
+                        sentence_text="[WEB_UNAVAILABLE]",
+                        source_agent="web_fallback",
+                        source_chunk_ids=[],
+                    ),
+                    *provenance,
+                ]
+
         ctx.final_answer = provenance
         output_hash = sha256_json([p.model_dump() for p in provenance])
         yield AgentEndEvent(

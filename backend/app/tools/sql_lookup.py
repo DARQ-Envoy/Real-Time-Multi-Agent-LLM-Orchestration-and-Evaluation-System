@@ -41,15 +41,17 @@ _SYSTEM_PROMPT = (
 
 _ro_pool: asyncpg.Pool | None = None
 _schema_cache: str | None = None
+_compact_schema_cache: str | None = None
 _COMMENT_LINE = re.compile(r"--[^\n]*")
 _COMMENT_BLOCK = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 def set_ro_pool(pool: asyncpg.Pool | None) -> None:
-    global _ro_pool, _schema_cache
+    global _ro_pool, _schema_cache, _compact_schema_cache
     _ro_pool = pool
     if pool is None:
         _schema_cache = None
+        _compact_schema_cache = None
 
 
 async def _load_schema_text(pool: asyncpg.Pool) -> str:
@@ -78,6 +80,26 @@ async def _load_schema_text(pool: asyncpg.Pool) -> str:
     ]
     _schema_cache = "\n".join(lines)
     return _schema_cache
+
+
+async def _load_compact_schema_text(pool: asyncpg.Pool) -> str:
+    global _compact_schema_cache
+    if _compact_schema_cache is not None:
+        return _compact_schema_cache
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT table_name
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+             ORDER BY table_name
+            """
+        )
+    names = [r["table_name"] for r in rows]
+    _compact_schema_cache = (
+        ", ".join(names) if names else "(empty public schema)"
+    )
+    return _compact_schema_cache
 
 
 def _strip_comments(sql: str) -> str:
@@ -169,10 +191,24 @@ async def run(ctx: SharedContext, llm: LLMClient) -> ToolResult:
                 latency_ms=(time.perf_counter() - started) * 1000.0,
             )
         try:
-            schema_text = await _load_schema_text(pool)
+            hint = ctx.agent_outputs.get("__retry_hint__")
+            if hint == "schema_simplified":
+                schema_text = await _load_compact_schema_text(pool)
+                system_prompt = (
+                    f"{_SYSTEM_PROMPT}\n\nSchema (table names only):\n{schema_text}"
+                )
+                user_msg = (
+                    f"Question: {question}\n\n"
+                    "Return the simplest correct SELECT for this question. "
+                    "Call emit_sql."
+                )
+            else:
+                schema_text = await _load_schema_text(pool)
+                system_prompt = f"{_SYSTEM_PROMPT}\n\nSchema:\n{schema_text}"
+                user_msg = f"Question: {question}\n\nCall emit_sql."
             tool_call = await llm.call_tool(
-                system=f"{_SYSTEM_PROMPT}\n\nSchema:\n{schema_text}",
-                user=f"Question: {question}\n\nCall emit_sql.",
+                system=system_prompt,
+                user=user_msg,
                 tool=EMIT_SQL_TOOL,
                 max_tokens=400,
             )

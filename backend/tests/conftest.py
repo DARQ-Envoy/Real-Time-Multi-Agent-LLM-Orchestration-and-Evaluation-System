@@ -28,6 +28,23 @@ class FakeLLM:
             yield ""  # pragma: no cover
 
 
+class ScriptedLLM(FakeLLM):
+    """Returns a different tool_response on each successive call_tool invocation."""
+
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.responses = list(responses)
+        self.cursor = 0
+
+    async def call_tool(self, *, system: str, user: str, tool: dict[str, Any], max_tokens: int = 1024) -> dict[str, Any]:
+        self.calls.append({"system": system, "user": user, "tool": tool["name"]})
+        if self.cursor >= len(self.responses):
+            return {}
+        out = self.responses[self.cursor]
+        self.cursor += 1
+        return out
+
+
 class FakeConnection:
     def __init__(self, sink: list[tuple[str, tuple[Any, ...]]]) -> None:
         self._sink = sink

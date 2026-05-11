@@ -52,10 +52,16 @@ class DecompositionAgent(AgentBase):
         yield AgentStartEvent(agent_id=self.agent_id, budget_remaining=self.max_context_tokens)
         accumulated = ""
         violations: str | None = None
+        user_prefix = ""
+        if ctx.agent_outputs.get("code_exec_failed"):
+            user_prefix = (
+                "Note: a prior code_exec attempt for this job failed; "
+                "avoid plans that require code execution.\n\n"
+            )
         try:
             async for delta in self.llm.stream_text(
                 system=self.system_prompt,
-                user=f"Query:\n{ctx.query}",
+                user=f"{user_prefix}Query:\n{ctx.query}",
                 max_tokens=512,
             ):
                 accumulated += delta

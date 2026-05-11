@@ -96,6 +96,7 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
         db_pool,
         redis,
         tool_name="self_reflection",
+        max_retries=0,
     )
 
     if not settings.CUT_RESOLUTION_LOOP and _synthesis_needs_resolution(shared_ctx):
@@ -141,6 +142,11 @@ async def _dispatch_tool_calls(
                 db_pool,
                 redis,
                 tool_name=planned.tool_name,
+                input_payload={
+                    "agent_id": planned.agent_id,
+                    "tool_name": planned.tool_name,
+                    "input": dict(planned.input),
+                },
             )
         finally:
             ctx.agent_outputs.pop("__tool_input__", None)

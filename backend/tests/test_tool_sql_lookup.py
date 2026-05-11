@@ -83,3 +83,40 @@ async def test_ro_role_cannot_insert(ro_pool):
             await conn.execute(
                 "INSERT INTO jobs(id, query, status) VALUES (gen_random_uuid(), 'x', 'QUEUED')"
             )
+
+
+async def test_hint_triggers_compact_schema_prompt(ro_pool, shared_ctx):
+    """When __retry_hint__ is set, the LLM call uses the compact-schema system prompt."""
+    from tests.conftest import ScriptedLLM
+
+    llm = ScriptedLLM(
+        responses=[
+            {"sql": "SELECT id FROM jobs LIMIT 1", "justification": "compact"}
+        ]
+    )
+    shared_ctx.agent_outputs["__tool_input__"] = {"question": "show one job id"}
+    shared_ctx.agent_outputs["__retry_hint__"] = "schema_simplified"
+
+    result = await sql_lookup.run(shared_ctx, llm)
+
+    # The LLM call's system prompt should carry the compact-schema marker.
+    assert len(llm.calls) == 1
+    assert "Schema (table names only)" in llm.calls[0]["system"]
+    assert "simplest correct SELECT" in llm.calls[0]["user"]
+    assert result.success is True
+
+
+async def test_no_hint_uses_full_schema(ro_pool, shared_ctx):
+    from tests.conftest import ScriptedLLM
+
+    llm = ScriptedLLM(
+        responses=[
+            {"sql": "SELECT id FROM jobs LIMIT 1", "justification": "full"}
+        ]
+    )
+    shared_ctx.agent_outputs["__tool_input__"] = {"question": "show one job id"}
+
+    result = await sql_lookup.run(shared_ctx, llm)
+    assert "Schema:" in llm.calls[0]["system"]
+    assert "Schema (table names only)" not in llm.calls[0]["system"]
+    assert result.success is True
