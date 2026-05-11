@@ -80,10 +80,17 @@ class JobResponse(BaseModel):
     stream_url: str
 
 
+class PlannedToolCall(BaseModel):
+    agent_id: str
+    tool_name: str
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
 class RoutingPlan(BaseModel):
     agent_sequence: list[str] = Field(default_factory=list)
     dependency_edges: list[tuple[str, str]] = Field(default_factory=list)
     budget_allocations: dict[str, int] = Field(default_factory=dict)
+    tool_calls: list[PlannedToolCall] = Field(default_factory=list)
     justification: str = ""
 
 

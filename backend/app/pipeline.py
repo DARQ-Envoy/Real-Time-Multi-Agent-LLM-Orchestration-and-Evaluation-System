@@ -22,6 +22,7 @@ from .persistence import log_agent_event, sha256_json
 from .redis_bus import publish_event
 from .settings import settings
 from .tools import self_reflection
+from .tools.registry import REGISTRY as TOOL_REGISTRY
 from .tools.runner import run_with_retry
 
 AGENT_REGISTRY: dict[str, type[AgentBase]] = {
@@ -81,6 +82,7 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
         cls = AGENT_REGISTRY.get(agent_id)
         if cls is None:
             continue
+        await _dispatch_tool_calls(agent_id, shared_ctx, llm, db_pool, redis)
         agent = cls(llm)
         await _run_agent(agent, shared_ctx, redis, db_pool)
 
@@ -109,6 +111,49 @@ async def run(shared_ctx: SharedContext, redis, db_pool) -> list[SentenceProvena
 
     _dump_critique_summary(shared_ctx)
     return shared_ctx.final_answer
+
+
+async def _dispatch_tool_calls(
+    agent_id: str,
+    ctx: SharedContext,
+    llm: LLMClient,
+    db_pool,
+    redis,
+) -> None:
+    """Run any RoutingPlan.tool_calls keyed to this agent through run_with_retry."""
+    plan = ctx.routing_plan
+    if plan is None or not plan.tool_calls:
+        return
+    pending = [tc for tc in plan.tool_calls if tc.agent_id == agent_id]
+    if not pending:
+        return
+    tools_bucket = ctx.agent_outputs.setdefault("tools", {})
+    for planned in pending:
+        tool_fn = TOOL_REGISTRY.get(planned.tool_name)
+        if tool_fn is None:
+            continue
+        ctx.agent_outputs["__tool_input__"] = dict(planned.input)
+        try:
+            result = await run_with_retry(
+                tool_fn,
+                ctx,
+                llm,
+                db_pool,
+                redis,
+                tool_name=planned.tool_name,
+            )
+        finally:
+            ctx.agent_outputs.pop("__tool_input__", None)
+        tools_bucket.setdefault(planned.tool_name, []).append(
+            {
+                "input": planned.input,
+                "success": result.success,
+                "data": result.data,
+                "error_code": result.error_code,
+                "latency_ms": result.latency_ms,
+                "accepted_by_agent": result.accepted_by_agent,
+            }
+        )
 
 
 def _dump_critique_summary(ctx: SharedContext) -> None:

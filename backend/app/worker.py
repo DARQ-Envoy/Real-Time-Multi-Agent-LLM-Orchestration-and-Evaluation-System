@@ -7,11 +7,16 @@ from typing import Any
 
 from arq.connections import RedisSettings
 
-from . import pipeline
-from .db import create_pool
+import logging
+
+from . import bootstrap, pipeline
+from .db import create_pool, create_ro_pool
 from .models import ErrorEvent, JobCompleteEvent, SharedContext
 from .redis_bus import publish_event
 from .settings import settings
+from .tools import sql_lookup
+
+_log = logging.getLogger(__name__)
 
 
 def _redis_settings() -> RedisSettings:
@@ -19,10 +24,25 @@ def _redis_settings() -> RedisSettings:
 
 
 async def startup(ctx: dict[str, Any]) -> None:
-    ctx["db_pool"] = await create_pool()
+    pool = await create_pool()
+    ctx["db_pool"] = pool
+    # Idempotent — also runs in main.lifespan. Required here so the worker
+    # can boot before the API and still have mega_ro available.
+    await bootstrap.init_schema(pool)
+    try:
+        ctx["ro_pool"] = await create_ro_pool()
+        sql_lookup.set_ro_pool(ctx["ro_pool"])
+    except Exception as exc:
+        _log.warning("mega_ro pool unavailable; sql_lookup disabled: %s", exc)
+        ctx["ro_pool"] = None
+        sql_lookup.set_ro_pool(None)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    ro_pool = ctx.get("ro_pool")
+    if ro_pool is not None:
+        await ro_pool.close()
+    sql_lookup.set_ro_pool(None)
     pool = ctx.get("db_pool")
     if pool is not None:
         await pool.close()

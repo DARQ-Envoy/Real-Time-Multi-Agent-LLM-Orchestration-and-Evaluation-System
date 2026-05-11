@@ -10,6 +10,8 @@ services:
       REDIS_URL: redis://redis:6379
       LLM_API_KEY: ${ANTHROPIC_API_KEY:-stub-not-used-in-slice-0}
       LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5-20251001}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      MEGA_RO_PASSWORD: ${MEGA_RO_PASSWORD:-mega_ro}
     depends_on:
       db:
         condition: service_healthy
@@ -27,6 +29,8 @@ services:
       REDIS_URL: redis://redis:6379
       LLM_API_KEY: ${ANTHROPIC_API_KEY:-stub-not-used-in-slice-0}
       LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5-20251001}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      MEGA_RO_PASSWORD: ${MEGA_RO_PASSWORD:-mega_ro}
     depends_on:
       db:
         condition: service_healthy

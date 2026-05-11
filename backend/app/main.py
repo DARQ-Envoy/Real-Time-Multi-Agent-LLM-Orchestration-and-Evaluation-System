@@ -14,9 +14,11 @@ from fastapi.staticfiles import StaticFiles
 
 from . import bootstrap
 from .db import create_pool as create_db_pool
+from .db import create_ro_pool
 from .models import JobRequest, JobResponse
 from .redis_bus import subscribe
 from .settings import settings
+from .tools import sql_lookup
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -29,13 +31,28 @@ def _redis_settings() -> RedisSettings:
 async def lifespan(app: FastAPI):
     db_pool = await create_db_pool()
     await bootstrap.init_schema(db_pool)
+    ro_pool = None
+    try:
+        ro_pool = await create_ro_pool()
+        sql_lookup.set_ro_pool(ro_pool)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "mega_ro pool unavailable; sql_lookup disabled: %s", exc
+        )
+        sql_lookup.set_ro_pool(None)
     arq_pool = await create_arq_pool(_redis_settings())
     app.state.db_pool = db_pool
+    app.state.ro_pool = ro_pool
     app.state.arq = arq_pool
     try:
         yield
     finally:
         await arq_pool.aclose()
+        sql_lookup.set_ro_pool(None)
+        if ro_pool is not None:
+            await ro_pool.close()
         await db_pool.close()
 
 
